@@ -1,0 +1,148 @@
+From f66b91750eb3c2f4bcb5b1c35518fafc17e5ca78 Mon Sep 17 00:00:00 2001
+From: u9g <git@u9g.dev>
+Date: Tue, 21 May 2024 16:49:51 -0400
+Subject: [PATCH] Add ListUsedInReflection error
+
+
+diff --git a/compiler-core/src/error.rs b/compiler-core/src/error.rs
+index ce49b49..1248465 100644
+--- a/compiler-core/src/error.rs
++++ b/compiler-core/src/error.rs
+@@ -2904,6 +2904,25 @@ See: https://tour.gleam.run/advanced-features/use/");
+                         }),
+                     }
+                 },
++                TypeError::ListUsedInReflection { location } => {
++                    let text = 
++                        "You used a gleam list where you should have used a javascript list. Convert using `std.to_js_array`.".to_string();
++                    Diagnostic{
++                        title: "Gleam List used in Reflection".into(),
++                        text,
++                        hint: None,
++                        level: Level::Error,
++                        location: Some(Location {
++                            label: Label {
++                                text: Some("Argument of list here".into()),
++                                span: *location,
++                            },
++                            path: path.clone(),
++                            src: src.clone(),
++                            extra_labels: vec![],
++                        })
++                    }
++                }
+             }
+                 })
+                 .collect_vec(),
+diff --git a/compiler-core/src/type_.rs b/compiler-core/src/type_.rs
+index be60b0f..e3b7421 100644
+--- a/compiler-core/src/type_.rs
++++ b/compiler-core/src/type_.rs
+@@ -215,6 +215,14 @@ impl Type {
+         }
+     }
+ 
++    pub fn is_list(&self) -> bool {
++        match self {
++            Self::Named { module, name, .. } if "List" == name && is_prelude_module(module) => true,
++            Self::Var { type_ } => type_.borrow().is_string(),
++            _ => false,
++        }
++    }
++
+     pub fn named_type_name(&self) -> Option<(EcoString, EcoString)> {
+         match self {
+             Self::Named { module, name, .. } => Some((module.clone(), name.clone())),
+diff --git a/compiler-core/src/type_/error.rs b/compiler-core/src/type_/error.rs
+index 3f3c388..f22af22 100644
+--- a/compiler-core/src/type_/error.rs
++++ b/compiler-core/src/type_/error.rs
+@@ -422,6 +422,10 @@ pub enum Error {
+         location: SrcSpan,
+         actual_type: Option<Type>,
+     },
++
++    ListUsedInReflection {
++        location: SrcSpan,
++    },
+ }
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+@@ -667,6 +671,7 @@ impl Error {
+     pub fn start_location(&self) -> u32 {
+         match self {
+             Error::SrcImportingTest { location, .. }
++            | Error::ListUsedInReflection { location }
+             | Error::BitArraySegmentError { location, .. }
+             | Error::UnknownVariable { location, .. }
+             | Error::UnknownType { location, .. }
+diff --git a/compiler-core/src/type_/expression.rs b/compiler-core/src/type_/expression.rs
+index bb244dd..9928cc4 100644
+--- a/compiler-core/src/type_/expression.rs
++++ b/compiler-core/src/type_/expression.rs
+@@ -794,6 +794,62 @@ impl<'a, 'b> ExprTyper<'a, 'b> {
+                 });
+         }
+ 
++        match &fun {
++            TypedExpr::Call { fun, .. } => {
++                let should_search_args = match fun.as_ref() {
++                    TypedExpr::ModuleSelect {
++                        label, module_name, ..
++                    } if matches!(module_name.as_ref(), "ct/reflection")
++                        && matches!(
++                            label.as_ref(),
++                            "call_method" | "get_static_method" | "new_instance"
++                        ) =>
++                    {
++                        true
++                    }
++                    TypedExpr::Var {
++                        constructor:
++                            ValueConstructor {
++                                variant: ValueConstructorVariant::ModuleFn { name, .. },
++                                ..
++                            },
++                        ..
++                    } if matches!(
++                        name.as_ref(),
++                        "reflection__get_static_method"
++                            | "reflection__call_method"
++                            | "reflection__new_instance"
++                    ) =>
++                    {
++                        true
++                    }
++                    _ => false,
++                };
++
++                if should_search_args {
++                    for arg in &args {
++                        if let TypedExpr::Tuple { typ, elems, .. } = &arg.value {
++                            let Type::Tuple {
++                                elems: tuple_type_elems,
++                            } = typ.as_ref()
++                            else {
++                                unreachable!()
++                            };
++
++                            for (i, elem) in tuple_type_elems.iter().enumerate() {
++                                if elem.is_list() {
++                                    self.errors.push(Error::ListUsedInReflection {
++                                        location: elems[i].location(),
++                                    });
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++            _ => {}
++        };
++
+         Ok(TypedExpr::Call {
+             location,
+             typ,
+--
+libgit2 1.7.2
+
