@@ -1,0 +1,52 @@
+From f3148225d90d9c44997d96254d5d30db70b2a87e Mon Sep 17 00:00:00 2001
+From: u9g <git@u9g.dev>
+Date: Tue, 21 May 2024 17:05:30 -0400
+Subject: [PATCH] support arguments in visitor
+
+
+diff --git a/compiler-core/src/ast/visit.rs b/compiler-core/src/ast/visit.rs
+index da29660..99e1648 100644
+--- a/compiler-core/src/ast/visit.rs
++++ b/compiler-core/src/ast/visit.rs
+@@ -64,6 +64,10 @@ pub trait Visit<'ast> {
+         visit_typed_function(self, fun);
+     }
+ 
++    fn visit_argument(&mut self, arg: &'ast super::Arg<Arc<Type>>) {
++        visit_argument(self, arg);
++    }
++
+     fn visit_typed_expr(&mut self, expr: &'ast TypedExpr) {
+         visit_typed_expr(self, expr);
+     }
+@@ -338,6 +342,16 @@ where
+     for stmt in &fun.body {
+         v.visit_typed_statement(stmt);
+     }
++
++    for arg in &fun.arguments {
++        v.visit_argument(arg);
++    }
++}
++
++pub fn visit_argument<'a, V>(_v: &mut V, _arg: &'a super::Arg<Arc<Type>>)
++where
++    V: Visit<'a> + ?Sized,
++{
+ }
+ 
+ pub fn visit_typed_expr<'a, V>(v: &mut V, node: &'a TypedExpr)
+@@ -550,6 +564,10 @@ pub fn visit_typed_expr_fn<'a, V>(
+     for stmt in body {
+         v.visit_typed_statement(stmt);
+     }
++
++    for arg in _args {
++        v.visit_argument(arg);
++    }
+ }
+ 
+ pub fn visit_typed_expr_list<'a, V>(
+--
+libgit2 1.7.2
+
