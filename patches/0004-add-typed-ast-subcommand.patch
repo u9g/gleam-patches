@@ -1,0 +1,150 @@
+From bca456688dfaf25ec2da07d832645a34e8343ecb Mon Sep 17 00:00:00 2001
+From: u9g <git@u9g.dev>
+Date: Tue, 21 May 2024 17:25:07 -0400
+Subject: [PATCH] add typed-ast subcommand
+
+
+diff --git a/compiler-cli/src/export.rs b/compiler-cli/src/export.rs
+index 1d8a06e..5a29078 100644
+--- a/compiler-cli/src/export.rs
++++ b/compiler-cli/src/export.rs
+@@ -127,6 +127,36 @@ pub fn typescript_prelude() -> Result<()> {
+     Ok(())
+ }
+ 
++pub fn typed_ast(path: Utf8PathBuf) -> Result<()> {
++    use gleam_core::language_server::{FileSystemProxy, NullProgressReporter, Router};
++
++    let mut router = Router::new(
++        NullProgressReporter,
++        FileSystemProxy::new(crate::fs::ProjectIO::new()),
++    );
++    let project = router.project_for_path(path.clone()).unwrap().unwrap();
++
++    let components = path
++        .strip_prefix(project.engine.paths.root())
++        .unwrap()
++        .components()
++        .skip(1)
++        .map(|c| c.as_os_str().to_string_lossy());
++    let module_name: ecow::EcoString = itertools::Itertools::intersperse(components, "/".into())
++        .collect::<String>()
++        .strip_suffix(".gleam")
++        .unwrap()
++        .into();
++
++    project.engine.compile_please().result.unwrap();
++
++    let module = project.engine.compiler.modules.get(&module_name).unwrap();
++
++    println!("{:#?}", module.ast.definitions);
++
++    Ok(())
++}
++
+ pub fn package_interface(path: Utf8PathBuf) -> Result<()> {
+     // Build the project
+     let mut built = crate::build::main(
+diff --git a/compiler-cli/src/main.rs b/compiler-cli/src/main.rs
+index 7d03605..ac3a376 100644
+--- a/compiler-cli/src/main.rs
++++ b/compiler-cli/src/main.rs
+@@ -269,6 +269,11 @@ pub enum ExportTarget {
+         /// The path to write the JSON file to
+         output: Utf8PathBuf,
+     },
++    /// The Typed AST of a file
++    TypedAST {
++        #[arg(long = "file", required = true)]
++        file: Utf8PathBuf,
++    },
+ }
+ 
+ #[derive(Args, Debug, Clone)]
+@@ -506,6 +511,7 @@ fn main() {
+         Command::Export(ExportTarget::HexTarball) => export::hex_tarball(),
+         Command::Export(ExportTarget::JavascriptPrelude) => export::javascript_prelude(),
+         Command::Export(ExportTarget::TypescriptPrelude) => export::typescript_prelude(),
++        Command::Export(ExportTarget::TypedAST { file }) => export::typed_ast(file),
+         Command::Export(ExportTarget::PackageInterface { output }) => {
+             export::package_interface(output)
+         }
+diff --git a/compiler-core/src/language_server.rs b/compiler-core/src/language_server.rs
+index 656da02..5012c13 100644
+--- a/compiler-core/src/language_server.rs
++++ b/compiler-core/src/language_server.rs
+@@ -12,6 +12,9 @@ mod server;
+ #[cfg(test)]
+ mod tests;
+ 
++pub use files::FileSystemProxy;
++pub use router::{NullProgressReporter, Router};
++
+ pub use server::LanguageServer;
+ 
+ use crate::{
+diff --git a/compiler-core/src/language_server/engine.rs b/compiler-core/src/language_server/engine.rs
+index cc8b3ea..a3fbc32 100644
+--- a/compiler-core/src/language_server/engine.rs
++++ b/compiler-core/src/language_server/engine.rs
+@@ -46,13 +46,13 @@ pub enum Compilation {
+ 
+ #[derive(Debug)]
+ pub struct LanguageServerEngine<IO, Reporter> {
+-    pub(crate) paths: ProjectPaths,
++    pub paths: ProjectPaths,
+ 
+     /// A compiler for the project that supports repeat compilation of the root
+     /// package.
+     /// In the event the project config changes this will need to be
+     /// discarded and reloaded to handle any changes to dependencies.
+-    pub(crate) compiler: LspProjectCompiler<FileSystemProxy<IO>>,
++    pub compiler: LspProjectCompiler<FileSystemProxy<IO>>,
+ 
+     modules_compiled_since_last_feedback: Vec<Utf8PathBuf>,
+     compiled_since_last_feedback: bool,
+diff --git a/compiler-core/src/language_server/router.rs b/compiler-core/src/language_server/router.rs
+index 6f180ed..9221e41 100644
+--- a/compiler-core/src/language_server/router.rs
++++ b/compiler-core/src/language_server/router.rs
+@@ -18,6 +18,19 @@ use camino::{Utf8Path, Utf8PathBuf};
+ 
+ use super::feedback::FeedbackBookKeeper;
+ 
++#[derive(Clone, Copy, Debug)]
++pub struct NullProgressReporter;
++
++impl ProgressReporter for NullProgressReporter {
++    fn compilation_started(&self) {}
++
++    fn compilation_finished(&self) {}
++
++    fn dependency_downloading_started(&self) {}
++
++    fn dependency_downloading_finished(&self) {}
++}
++
+ /// The language server instance serves a language client, typically a text
+ /// editor. The editor could have multiple Gleam projects open at once, so run
+ /// an instance of the language server engine for each project.
+@@ -26,7 +39,7 @@ use super::feedback::FeedbackBookKeeper;
+ /// file using the nearest parent `gleam.toml` file.
+ ///
+ #[derive(Debug)]
+-pub(crate) struct Router<IO, Reporter> {
++pub struct Router<IO, Reporter> {
+     io: FileSystemProxy<IO>,
+     engines: HashMap<Utf8PathBuf, Project<IO, Reporter>>,
+     progress_reporter: Reporter,
+@@ -183,7 +196,7 @@ where
+ }
+ 
+ #[derive(Debug)]
+-pub(crate) struct Project<A, B> {
++pub struct Project<A, B> {
+     pub engine: LanguageServerEngine<A, B>,
+     pub feedback: FeedbackBookKeeper,
+     pub gleam_toml_modification_time: SystemTime,
+--
+libgit2 1.7.2
+
